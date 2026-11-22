@@ -1,11 +1,4 @@
--- Growblox Hansel - LOADER. Ini satu-satunya file yang dijalankan:
---
---   loadstring(game:HttpGet("https://raw.githubusercontent.com/USERNAME/REPO/main/loader.lua"))()
---
--- Loader mengunduh manifest.lua, lalu semua modul di src/ (paralel), merangkainya, dan menjalankan main.
--- Opsional (isi sebelum menjalankan loader):
---   getgenv().GrowbloxHanselBase    = "https://raw.githubusercontent.com/USERNAME/REPO/dev/"  -- cabang lain
---   getgenv().GrowbloxHanselDevPath = "GrowbloxHansel"  -- baca dari folder workspace executor, bukan internet
+
 
 local BASE = "https://raw.githubusercontent.com/Kiinaaa/Growblox-Ky/main/" -- GANTI: username & nama repo kamu
 local RETRIES, TIMEOUT = 3, 60
