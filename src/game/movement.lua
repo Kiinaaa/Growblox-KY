@@ -11,8 +11,21 @@ return function(G)
     -- Ganti fungsi arah/lompat milik game dengan versi kita. Selama dipegang, karakter
     -- bergerak sesuai hold.direction (-1 kiri, 0 diam, 1 kanan) dan hold.jump.
     -- Pickup bawaan game juga dibungkus: bisa ditahan (pausePickup) saat menanam/sinkron tas.
+    -- v0.9.6: kontrol dianggap MASIH terpasang hanya kalau fungsi arah/lompat di game masih versi kita. Kalau game
+    -- memasang ulang (respawn, masuk world, reset avatar), override kita lepas dan karakter tidak menurut lagi
+    -- (kelihatan diam / tidak jalan). Di kasus itu kontrol dipasang ulang otomatis.
+    local function stillAttached(hold, r)
+        return hold.table == r.controls and hold.world == r.world
+            and r.controls.dir == hold.dirOverride and r.controls.jumping == hold.jumpOverride
+    end
     function Movement.takeControls()
-        if App.controls then return App.controls end
+        local current = App.controls
+        if current then
+            local ok, rt = pcall(Bridge.runtime)
+            if not ok or stillAttached(current, rt) then return current end
+            Movement.releaseControls()
+            App.controlsReattached = (App.controlsReattached or 0) + 1
+        end
         local r = Bridge.runtime()
         local controls, world = r.controls, r.world
         local hold = { table = controls, dir = controls.dir, jumping = controls.jumping, direction = 0, jump = false,
@@ -133,6 +146,7 @@ return function(G)
         end
         while true do
             worldCheck(worldName, token)
+            hold = Movement.takeControls() -- v0.9.6: pastikan kontrol masih terpasang (replan juga lewat sini)
             local state = position()
             local proceed, _, pacing = collectionStep(state)
             if not proceed then hold.direction, hold.jump = 0, false; return false end
@@ -202,7 +216,11 @@ return function(G)
                     state = position()
                     if not stepPacing and reached(state, waypoint.x + 0.5, waypoint.y + 1) then break end
                     assert(os.clock() < deadline, "Returning to the saved position timed out. Check the route.")
-                    if G.focusedTextBox() or stepPacing then
+                    -- v0.9.6: kotak teks yang masih fokus (mis. habis mengetik nama world di UI) dulu MEMBEKUKAN karakter
+                    -- selamanya. Sekarang fokusnya dilepas dan jalan lanjut.
+                    local focused = G.focusedTextBox()
+                    if focused then pcall(function() focused:ReleaseFocus() end) end
+                    if stepPacing then
                         hold.direction, hold.jump = 0, false
                         movedAt = os.clock()
                         if stepPacing then began, deadline = began + 0.025, deadline + 0.025 end

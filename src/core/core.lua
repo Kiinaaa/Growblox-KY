@@ -48,7 +48,7 @@ function Core.defaults()
         -- breakLeft: break di ujung KIRI barisan farm (otomatis). breakTiles: tile break relatif ke spot (kosong = otomatis).
         -- placeDelay/punchDelay: kecepatan place & break khusus Rotation (detik, minimum 0.001, tidak boleh 0).
         rotation = { worlds = {}, seedId = 0, blockTarget = 180, pnbTiles = 6, boxes = {},
-            breakLeft = true, breakTiles = {}, placeDelay = options.placeDelay, punchDelay = options.punchDelay,
+            breakLeft = false, breakTiles = {}, placeDelay = options.placeDelay, punchDelay = options.punchDelay,
             harvestAll = false }, -- v0.9: tidak dipakai lagi (target blok selalu berlaku)
         -- PNB: tiles = kotak yang di-place & break, relatif ke posisi berdiri (dx kanan, dy bawah).
         pnb = { tiles = { { dx = 0, dy = -1 } }, autoStock = false, autoDrop = false },

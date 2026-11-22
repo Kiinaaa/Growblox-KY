@@ -195,25 +195,6 @@ return function(G)
         for _, tile in ipairs(tiles) do if tileAt(tile.x, tile.y) == blockId then n = n + 1 end end
         return n
     end
-    -- Spot break otomatis: ujung KIRI barisan farm. Baris acuan = baris pohon yang terakhir dipanen
-    -- (atau baris tempat berdiri). Utamakan tile tepat di kiri baris; kalau tidak bisa dipijak
-    -- (tidak ada lantai / dinding), pakai tile paling kiri baris itu sendiri. nil = tidak ketemu.
-    local function leftSpot(r, y)
-        local row
-        for _, candidate in ipairs(Core.farmRows(r.world, r.items)) do
-            if not row or math.abs(candidate.y - y) < math.abs(row.y - y) then row = candidate end
-        end
-        if not row then return nil end
-        local function walkable(x)
-            if x < 0 or x >= r.world.w then return false end
-            local floor = r.items[r.world.fg[row.y + 1] and r.world.fg[row.y + 1][x] or 0]
-            local tile = r.items[r.world.fg[row.y] and r.world.fg[row.y][x] or 0]
-            return floor ~= nil and (floor.solid == true or floor.platform == true) and (not tile or not tile.solid)
-        end
-        for _, x in ipairs({ row.left - 1, row.left }) do
-            if walkable(x) then return { x = x, y = row.y } end
-        end
-    end
     -- Tile break dari spot: pilihan user (Set tile break) kalau ada yang bisa dipakai, kalau tidak otomatis.
     local function breakTiles(r, blockId, here, limit, seeds)
         seeds = seeds or {}
@@ -254,18 +235,16 @@ return function(G)
     -- langsung di-place lagi tanpa menunggu tile lain). Kalau di situ tidak ada tile yang bisa dipakai,
     -- coba berdiri di tile bekas panen lain (`spots`), maks 5 kali jalan.
     -- Return: daftar tile PNB (ikut di-replant), atau nil kalau tidak ketemu (blok tetap di tas).
-    function Rotation.pnbHere(r, box, blockId, seedId, token, spots, pending)
+    -- v0.9.6: PNB di LOKASI PANEN TERAKHIR (spot = tempat berdiri begitu blok mencapai target / pohon terakhir pecah),
+    -- bukan di kiri farm. Kalau karakter sempat bergeser (memungut drop), jalan balik dulu ke spot itu.
+    function Rotation.pnbHere(r, box, blockId, seedId, token, spots, pending, spot)
         local cfg = App.config.rotation
         local limit = cfg.pnbTiles or 6
         local here = standing()
-        if cfg.breakLeft ~= false then
-            local last = spots and spots[#spots]
-            local spot = leftSpot(r, last and last.y or here.y)
-            if spot and (spot.x ~= here.x or spot.y ~= here.y) then
-                info(string.format("PNB: jalan ke kiri barisan farm (%d,%d)...", spot.x, spot.y))
-                soft(token, r.world.name, function() Movement.moveTo(spot.x, spot.y, r.world.name, token) end)
-                here = standing()
-            end
+        if spot and (spot.x ~= here.x or spot.y ~= here.y) then
+            info(string.format("PNB: balik ke lokasi panen terakhir (%d,%d)...", spot.x, spot.y))
+            soft(token, r.world.name, function() Movement.moveTo(spot.x, spot.y, r.world.name, token) end)
+            here = standing()
         end
         local function pick() return breakTiles(r, blockId, here, limit, Pnb.seedDrops(r, seedId)) end
         -- v0.9: seed yang belum terpungut di sekitar spot dipungut dulu; tile yang masih ada seed tidak dipakai put/break.
@@ -478,6 +457,7 @@ return function(G)
         -- menemukan tile kosong di samping: panen 2 pohon lagi supaya ada tile kosong untuk PNB.
         local extra = 0
         local firstPass = true -- v0.9.4: panen pertama di world ini mulai dari ujung (atas, kiri)
+        local breakSpot = nil  -- v0.9.6: tempat berdiri saat pohon terakhir pecah / target blok tercapai = lokasi PNB
         -- dipakai juga untuk laporan; diulang dari scan setelah error tidak menghapus hitungan putaran ini
         local function progress(phase)
             info(string.format("Rotasi %s (%d/%d) - %s | dipanen %d, PNB %d blok, ditanam ulang %d",
@@ -538,13 +518,16 @@ return function(G)
                 progress("harvest (" .. plan.ripe .. " pohon mateng, break kalau blok >= " .. target() .. ")")
                 -- v0.9.4: panen pertama = dari baris paling atas, mulai dari ujung kiri; selanjutnya baris terdekat dulu
                 local ordered = firstPass and topDownRows(plan.rows) or Rotation.nearestRows(plan.rows, standing())
-                local leadIn = firstPass
                 for _, entry in ipairs(ordered) do
-                    if leadIn and entry.points[1] then
-                        leadIn = false
-                        local start = entry.points[1]
-                        progress(string.format("jalan ke ujung farm (%d,%d) untuk mulai panen", start.x, start.y))
-                        soft(token, name, function() Movement.moveTo(start.x, start.y, name, token) end)
+                    -- v0.9.6: tiap baris dimulai dari UJUNG-nya: kalau karakter belum di sana, jalan dulu (tanpa memukul),
+                    -- supaya pohon di awal baris tidak terlewat lalu jadi miss.
+                    local startPoint = entry.points[1]
+                    if startPoint then
+                        local here = standing()
+                        if here.y ~= startPoint.y or math.abs(here.x - startPoint.x) > 1 then
+                            progress(string.format("jalan ke ujung baris (%d,%d) untuk mulai panen", startPoint.x, startPoint.y))
+                            soft(token, name, function() Movement.moveTo(startPoint.x, startPoint.y, name, token) end)
+                        end
                     end
                     local lastPoint
                     -- v0.8.6: pohon dipanen dalam sapuan kontinu per potongan (10 pohon; 3 kalau mode target blok),
@@ -567,7 +550,10 @@ return function(G)
                             if count(blockId) >= target() then extra = extra - 1 end
                         end
                         -- ambil drop yang sudah siap (tanpa menunggu); sisanya ikut di potongan berikutnya / akhir baris
-                        if #done > 0 then soft(token, name, function() quickCollect(standing(), ids, token, false) end) end
+                        if #done > 0 then
+                            breakSpot = standing() -- v0.9.6: lokasi PNB = di sini
+                            soft(token, name, function() quickCollect(standing(), ids, token, false) end)
+                        end
                     end
                     if lastPoint then
                         soft(token, name, function() quickCollect(standing(), ids, token, true) end)
@@ -586,7 +572,9 @@ return function(G)
                 end
                 if #ordered > 0 then firstPass = false end
                 -- cek ulang: pohon mateng yang miss didatangi lagi
+                local beforeRetry = #harvested
                 retryMissed(harvested, full)
+                if #harvested > beforeRetry then breakSpot = standing() end
                 -- sisa drop di sekitar pohon yang barusan dipanen
                 if #harvested > 0 then
                     local last = harvested[#harvested]
@@ -606,7 +594,8 @@ return function(G)
             if count(blockId) > 0 then
                 local before = count(blockId)
                 progress("PNB")
-                local used = Rotation.pnbHere(r, box, blockId, seedId, token, harvested, pending)
+                local used = Rotation.pnbHere(r, box, blockId, seedId, token, harvested, pending, breakSpot)
+                breakSpot = nil
                 if used then
                     for _, tile in ipairs(used) do table.insert(pending, tile) end
                     stats.pnb = stats.pnb + (before - count(blockId))
@@ -726,7 +715,7 @@ return function(G)
     end
 
 
-    -- Pilih/batal pilih tile break (relatif ke spot di kiri barisan farm). Daftar kosong = otomatis.
+    -- Pilih/batal pilih tile break (relatif ke lokasi break = tempat panen terakhir). Daftar kosong = otomatis.
     function Rotation.toggleBreakTile(dx, dy)
         if dx == 0 and dy == 0 then return end
         local tiles, removed = {}, false
@@ -751,7 +740,7 @@ return function(G)
         local UI = G.UI
         local controls, syncing = {}, true
         UI.addStatus(tab:Paragraph({ Title = "Status", Desc = App.status }))
-        tab:Paragraph({ Title = "Cara kerja", Desc = "Per world di list: masuk & scan otomatis (tanaman = seed terbanyak, Display Box dicari otomatis) -> harvest pohon mateng sampai blok di tas = target -> PNB di beberapa tile kosong sekaligus sampai blok habis -> replant (atas, bekas panen, sisa farm) -> ulangi sampai tidak ada pohon mateng -> simpan seed sisa ke box -> world berikutnya (muter)." })
+        tab:Paragraph({ Title = "Cara kerja", Desc = "Per world di list: masuk & scan otomatis (tanaman = seed terbanyak, Display Box dicari otomatis) -> harvest pohon mateng sampai blok di tas = target -> PNB di lokasi panen terakhir (beberapa tile kosong sekaligus) sampai blok habis -> replant (atas, bekas panen, sisa farm) -> ulangi sampai tidak ada pohon mateng -> simpan seed sisa ke box -> world berikutnya (muter)." })
         local function setOption(fn)
             if syncing then return end
             local ok, message = pcall(function() Net.idle(); fn(); State.saveSession() end)
@@ -770,7 +759,7 @@ return function(G)
                 table.insert(lines, i .. ". " .. name .. (App.rotationWorlds and App.rotationWorlds[name] and (": " .. App.rotationWorlds[name]) or ""))
             end
             UI.paragraph(controls.list, "World rotasi", #lines > 0 and table.concat(lines, "\n") or "Belum ada world.")
-            UI.paragraph(controls.grid, "Tile break (relatif ke spot kiri farm)", Rotation.breakGridText())
+            UI.paragraph(controls.grid, "Tile break (relatif ke lokasi break (panen terakhir))", Rotation.breakGridText())
         end
         tab:Input({ Title = "World farm rotasi (urut)", Value = table.concat(App.config.rotation.worlds, ", "),
             Placeholder = "FARM1, FARM2, FARM3", Desc = "Terpisah dari list world Planting & Harvest. Pisahkan dengan koma.",
@@ -782,10 +771,7 @@ return function(G)
             Desc = "Panen berhenti begitu blok (di tas + yang sudah jatuh) mencapai angka ini, lalu langsung PNB. Contoh 10 = begitu 10 blok, langsung break.",
             Value = { Min = 1, Max = 200, Default = App.config.rotation.blockTarget },
             Callback = function(value) liveOption(function() App.config.rotation.blockTarget = math.floor(tonumber(value)) end) end })
-        tab:Toggle({ Title = "Break di kiri barisan farm (otomatis)", Value = App.config.rotation.breakLeft ~= false,
-            Desc = "Spot break dicari otomatis di ujung kiri barisan farm. Matikan untuk break di tempat berhenti panen.",
-            Callback = function(value) liveOption(function() App.config.rotation.breakLeft = value == true end) end })
-        controls.grid = tab:Paragraph({ Title = "Tile break (relatif ke spot kiri farm)", Desc = Rotation.breakGridText() })
+        controls.grid = tab:Paragraph({ Title = "Tile break (relatif ke lokasi break (panen terakhir))", Desc = Rotation.breakGridText() })
         tab:Button({ Title = "Set tile break", Desc = "Buka panel 5x5: pilih tile yang di-place & break dari spot. Kosong = otomatis.",
             Callback = function()
                 local ok, message = pcall(Pnb.openGridPanel, { key = "rotation", title = "Tile break rotasi - klik untuk pilih",

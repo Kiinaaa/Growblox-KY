@@ -154,7 +154,8 @@ return function(modules, VERSION)
                 .. "s, auto boost " .. (App.config.options.autoBoost and "NYALA" or "mati") .. " x"
                 .. string.format("%.2f", App.delayBoost or 1) .. ", miss terdeteksi " .. tostring(App.delayMisses or 0)
                 .. "x, penghalang dihancurkan " .. tostring(App.pnbObstacles or 0) .. "x",
-            "Kecepatan jalan panen & tanam: x" .. tostring(App.config.options.walkSpeed) .. ", batas waktu jalan " .. tostring(App.config.options.moveTimeout) .. "s",
+            "Kecepatan jalan panen & tanam: x" .. tostring(App.config.options.walkSpeed) .. ", batas waktu jalan " .. tostring(App.config.options.moveTimeout) .. "s"
+                .. ", kontrol dipasang ulang " .. tostring(App.controlsReattached or 0) .. "x",
             "Panen: jangkauan pukul sambil jalan " .. string.format("%.2f", App.harvestReach or 1.5) .. " tile, pohon miss " .. tostring(App.harvestMisses or 0) .. "x",
             "Stock terakhir: " .. tostring(App.stockDebug or "-"),
             "Auto collect: " .. (App.config and App.config.options.autoCollect and "semua item" or "idle off") .. ", saat PNB/Rotation SELALU (blok & gem), mode " .. G.AutoCollect.mode() .. ", jangkauan "
@@ -165,7 +166,7 @@ return function(modules, VERSION)
                 .. (App.rotationLastError and ("; error kecil terakhir: " .. App.rotationLastError) or ""),
             "Rotation cepat: replant dari jarak " .. tostring(App.rotationFastReplant ~= false) .. ", seed ditolak server "
                 .. tostring(App.rotationReplantMiss or 0) .. "x, tile PNB paralel " .. tostring(App.config.rotation.pnbTiles)
-                .. ", break kiri farm " .. tostring(App.config.rotation.breakLeft) .. ", tile break pilihan " .. #App.config.rotation.breakTiles
+                .. ", break di lokasi panen terakhir, tile break pilihan " .. #App.config.rotation.breakTiles
                 .. ", place " .. tostring(App.config.rotation.placeDelay) .. "s, break " .. tostring(App.config.rotation.punchDelay) .. "s",
             "Blok dipecah sesi ini: " .. App.stats.broken .. " | Pohon dipanen: " .. tostring(App.stats.trees or 0)
                 .. " | Seed ditanam ulang: " .. tostring(App.stats.replanted or 0),
@@ -276,6 +277,9 @@ return function(modules, VERSION)
         local nextSave = 0
         while App.alive do
             pcall(G.UI.refresh)
+            -- v0.9.6: selama task jalan, pastikan kontrol karakter masih terpasang (game bisa memasang ulang fungsi arah
+            -- saat respawn / ganti world; tanpa ini karakter diam walau script jalan).
+            if App.job and App.controls and not App.teleporting and not App.recovering then pcall(G.Movement.takeControls) end
             if not App.configuring and not App.job and os.clock() >= nextSave then -- saat task jalan config tidak berubah
                 nextSave = os.clock() + 5
                 local saved, issue = pcall(G.State.saveSession)

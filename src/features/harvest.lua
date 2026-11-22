@@ -111,7 +111,7 @@ return function(G)
     -- karakter BERHENTI di situ (return "hold" ke Movement) sampai pohon pecah, maksimal HOLD_MAX detik per
     -- pohon (lewat dari itu dilepas supaya tidak macet; pohon itu diselesaikan retryMissed). Jalan tetap
     -- cepat di antara pohon; yang diperlambat cuma saat tepat di pohon.
-    local HOLD_REACH, HOLD_MAX = 0.9, 0.8
+    local HOLD_REACH, HOLD_MAX = 0.9, 0.4 -- v0.9.6: tahan maks 0,4 dtk per pohon (dulu 0,8 = terasa diam)
     local function harvestTree(r, point, seedId, resolver, token)
         local name = r.world.name
         if tileAt(point.x, point.y) ~= seedId or not resolver.ripe(point.x, point.y, seedId) then return false end
