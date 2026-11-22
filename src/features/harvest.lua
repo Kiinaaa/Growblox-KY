@@ -30,7 +30,7 @@ return function(G)
         end
         local resolver, problem = Scan.resolveTrees(r, tiles)
         assert(#tiles == 0 or resolver, "Data pohon tidak terbaca: " .. tostring(problem) .. ". Scan world lalu copy diagnostics.")
-        local work, ripe, growing, longest, soonest = {}, 0, 0, 0, nil
+        local work, ripe, growing, longest, soonest, unknown = {}, 0, 0, 0, nil, 0
         for _, row in ipairs(Core.farmRows(r.world, r.items)) do
             local points = {}
             local first, last = row.direction == 1 and row.left or row.right, row.direction == 1 and row.right or row.left
@@ -38,6 +38,7 @@ return function(G)
                 if tileAt(x, row.y) == seedId then
                     local ready = resolver.ripe(x, row.y, seedId)
                     if ready then table.insert(points, { x = x, y = row.y }); ripe = ripe + 1
+                    elseif ready == nil then unknown = unknown + 1
                     elseif ready == false then
                         growing = growing + 1
                         local left = resolver.remaining(x, row.y, seedId) or 0
@@ -48,7 +49,7 @@ return function(G)
             end
             if #points > 0 then table.insert(work, { row = row, points = points }) end
         end
-        return { rows = work, ripe = ripe, growing = growing, longest = longest, soonest = soonest, resolver = resolver }
+        return { rows = work, ripe = ripe, growing = growing, unknown = unknown, longest = longest, soonest = soonest, resolver = resolver }
     end
 
     -- Simpan blok (dan seed) hasil panen ke Display Box farm. keepSeeds = sisakan seed untuk replant.

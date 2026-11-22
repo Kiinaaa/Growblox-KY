@@ -511,8 +511,15 @@ return function(G)
                 return n
             end
             local function full()
-                if r.inventory:room(blockId) < 5 then return true end
+                -- v0.9.7: tas tanpa blok tapi tempat sempit (penuh seed/item lain) BUKAN alasan berhenti panen.
+                -- Dulu ini membuat panen dilewati diam-diam. Sekarang seed dibereskan dulu (lihat di bawah).
+                if r.inventory:room(blockId) < 5 and count(blockId) > 0 then return true end
                 return available() >= target() and extra <= 0
+            end
+            if r.inventory:room(blockId) < 5 and count(blockId) == 0 then
+                progress("tas penuh, bereskan seed dulu sebelum panen")
+                soft(token, name, function() seedOverflow(r, box, blockId, seedId, token, pending, nil) end)
+                refreshInventory(token)
             end
             if not full() then
                 progress("harvest (" .. plan.ripe .. " pohon mateng, break kalau blok >= " .. target() .. ")")
@@ -588,7 +595,14 @@ return function(G)
                 soft(token, name, function() Pnb.collect(standing(), ids, token) end)
                 refreshInventory(token)
             end
-            if #harvested == 0 and count(blockId) == 0 and #pending == 0 then break end
+            if #harvested == 0 and count(blockId) == 0 and #pending == 0 then
+                info(string.format("Rotasi %s: tidak ada yang dipanen (mateng %d, tumbuh %d, tidak terbaca %d, tas room blok %d, target %d).",
+                    name, plan.ripe, plan.growing, plan.unknown or 0, r.inventory:room(blockId), target()))
+                App.rotationWorldNote = App.rotationWorldNote or {}
+                App.rotationWorldNote[name] = string.format("mateng %d, tumbuh %d, tidak terbaca %d | resolver: %s",
+                    plan.ripe, plan.growing, plan.unknown or 0, tostring(plan.resolver and plan.resolver.source))
+                break
+            end
             -- 2) PNB di tempat berhenti sampai blok habis
             local didPnb = false
             if count(blockId) > 0 then
