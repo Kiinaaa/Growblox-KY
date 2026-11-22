@@ -526,26 +526,6 @@ return function(G)
                 -- v0.9.4: panen pertama = dari baris paling atas, mulai dari ujung kiri; selanjutnya baris terdekat dulu
                 local ordered = firstPass and topDownRows(plan.rows) or Rotation.nearestRows(plan.rows, standing())
                 for _, entry in ipairs(ordered) do
-                    -- v0.9.6: tiap baris dimulai dari UJUNG-nya: kalau karakter belum di sana, jalan dulu (tanpa memukul),
-                    -- supaya pohon di awal baris tidak terlewat lalu jadi miss.
-                    local startPoint = entry.points[1]
-                    if startPoint then
-                        local here = standing()
-                        if here.y ~= startPoint.y or math.abs(here.x - startPoint.x) > 1 then
-                            progress(string.format("jalan ke ujung baris (%d,%d) untuk mulai panen", startPoint.x, startPoint.y))
-                            -- v0.9.8: jalan awal ini cuma pelengkap. Batas waktunya dipendekkan (maks 15 dtk) dan kalau gagal
-                            -- panen tetap lanjut dari posisi sekarang (sweepTrees jalan sendiri), jadi tidak bisa menahan panen.
-                            local opts = App.config.options
-                            local savedTimeout = opts.moveTimeout
-                            opts.moveTimeout = math.min(savedTimeout or 15, 15)
-                            local walked = soft(token, name, function() Movement.moveTo(startPoint.x, startPoint.y, name, token) end)
-                            opts.moveTimeout = savedTimeout
-                            if not walked then
-                                App.rotationWalkSkips = (App.rotationWalkSkips or 0) + 1
-                                progress("gagal jalan ke ujung baris, panen lanjut dari posisi sekarang")
-                            end
-                        end
-                    end
                     local lastPoint
                     -- v0.8.6: pohon dipanen dalam sapuan kontinu per potongan (10 pohon; 3 kalau mode target blok),
                     -- bukan berhenti & rem di tiap pohon. Tas/seed dicek di antara potongan.
