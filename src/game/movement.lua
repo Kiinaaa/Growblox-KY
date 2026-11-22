@@ -18,26 +18,40 @@ return function(G)
         return hold.table == r.controls and hold.world == r.world
             and r.controls.dir == hold.dirOverride and r.controls.jumping == hold.jumpOverride
     end
+    -- v0.9.10: pasang override ke `hold` yang SUDAH ADA (objek yang sama dipakai ulang). Dulu pemasangan ulang membuat
+    -- objek hold baru, sementara walkTo masih menulis arah ke objek lama = karakter diam walau script jalan.
+    local function install(hold, r)
+        local controls, world = r.controls, r.world
+        hold.table, hold.world = controls, world
+        if controls.dir ~= hold.dirOverride then hold.dir = controls.dir end
+        if controls.jumping ~= hold.jumpOverride then hold.jumping = controls.jumping end
+        if world.displayTake ~= hold.displayOverride then hold.displayTake = world.displayTake end
+        if world.takeDrop ~= hold.takeOverride then hold.takeDrop = world.takeDrop end
+        controls.dir, controls.jumping = hold.dirOverride, hold.jumpOverride
+        world.displayTake, world.takeDrop = hold.displayOverride, hold.takeOverride
+    end
     function Movement.takeControls()
         local current = App.controls
         if current then
             local ok, rt = pcall(Bridge.runtime)
-            if not ok or stillAttached(current, rt) then return current end
-            Movement.releaseControls()
+            if not ok then
+                Movement.releaseControls()
+                Bridge.runtime() -- lempar errornya
+            end
+            if stillAttached(current, rt) then return current end
+            install(current, rt)
+            current.suppressedTakes = {}
             App.controlsReattached = (App.controlsReattached or 0) + 1
+            return current
         end
         local r = Bridge.runtime()
-        local controls, world = r.controls, r.world
-        local hold = { table = controls, dir = controls.dir, jumping = controls.jumping, direction = 0, jump = false,
-            world = world, displayTake = world.displayTake, takeDrop = world.takeDrop, autoTakes = 0,
-            syncing = false, pausePickup = false, suppressedTakes = {} }
+        local hold = { direction = 0, jump = false, autoTakes = 0, syncing = false, pausePickup = false, suppressedTakes = {} }
         hold.dirOverride = function() return hold.direction end
         hold.jumpOverride = function() return hold.jump end
-        controls.dir, controls.jumping = hold.dirOverride, hold.jumpOverride
         hold.displayOverride = function() end
         hold.takeOverride = function(uid, ...)
             if hold.syncing or hold.pausePickup then
-                hold.suppressedTakes[uid] = { grid = world.fg, at = os.clock() }
+                hold.suppressedTakes[uid] = { grid = hold.world.fg, at = os.clock() }
                 return 0
             end
             hold.suppressedTakes[uid] = nil
@@ -47,7 +61,7 @@ return function(G)
             if not result[1] then error(result[2]) end
             return table.unpack(result, 2, result.n)
         end
-        world.displayTake, world.takeDrop = hold.displayOverride, hold.takeOverride
+        install(hold, r)
         App.controls = hold
         return hold
     end
