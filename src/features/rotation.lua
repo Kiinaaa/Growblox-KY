@@ -789,7 +789,7 @@ return function(G)
             end })
         G.Pnb.addDelaySliders(tab) -- Delay Place & Delay Break (sama dengan di tab Place & Break, saling sinkron)
         tab:Slider({ Title = "Kecepatan jalan saat panen & tanam", Step = 0.05,
-            Desc = "1 = kecepatan penuh. Makin kecil makin pelan (bawaan 0.5) supaya pukulan panen & tanam tidak miss. Hanya dipakai saat menyapu pohon / menanam, jalan jauh tetap normal. Langsung berlaku saat jalan.",
+            Desc = "1 = kecepatan penuh. Makin kecil makin pelan (bawaan 1 = tanpa pembatas; turunkan hanya kalau pukulan sering miss) supaya pukulan panen & tanam tidak miss. Hanya dipakai saat menyapu pohon / menanam, jalan jauh tetap normal. Langsung berlaku saat jalan.",
             Value = { Min = Core.LIMITS.walkSpeed[1], Max = Core.LIMITS.walkSpeed[2], Default = App.config.options.walkSpeed },
             Callback = function(value) liveOption(function() App.config.options.walkSpeed = math.min(1, math.max(0.2, tonumber(value))) end) end })
         tab:Slider({ Title = "Tile PNB paralel", Step = 1,

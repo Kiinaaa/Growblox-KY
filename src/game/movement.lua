@@ -129,7 +129,7 @@ return function(G)
         local hold = Movement.takeControls()
         local targetX, targetY = x + 0.5, y + 1
         local farmNavigation = App.job == "plant" or App.job == "harvest" or App.job == "rotation"
-        local timeout = App.config.options.moveTimeout -- v0.9.5: slider "Batas waktu jalan" sekarang benar-benar dipakai (bawaan 90)
+        local timeout = farmNavigation and math.max(90, App.config.options.moveTimeout) or App.config.options.moveTimeout -- v0.9.11: kembali seperti v0.9.4 (farm minimal 90 dtk)
         local deadline, banned, replans = os.clock() + timeout, {}, 0
         local function collectionStep(state)
             if not onStep then return true, 0 end

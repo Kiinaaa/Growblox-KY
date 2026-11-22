@@ -5,7 +5,7 @@ local Core = {}
 Core.CONFIG_VERSION = 1
 -- Revisi bawaan delay. Profil lama (tanpa delayRev) menyimpan bawaan 0.001 yang dulu diam-diam dibatasi 0.03/0.05;
 -- sekarang slider dipakai apa adanya, jadi delay lama diganti bawaan baru sekali saja.
-Core.DELAY_REV = 4 -- v0.9.5: delay Place & Break dipisah; delay & moveTimeout lama direset ke bawaan baru sekali
+Core.DELAY_REV = 5 -- v0.9.11: walkSpeed lama (0.5) direset ke 1 sekali; v0.9.5: delay Place & Break dipisah; delay & moveTimeout lama direset ke bawaan baru sekali
 Core.POINTS = { "pnb", "blockBox", "seedBox", "farmBox", "plantBox", "stock", "seedDrop" }
 -- Titik yang berupa TEMPAT BERDIRI (bukan box), jadi tidak butuh standX/standY.
 Core.STAND_POINTS = { pnb = true }
@@ -20,7 +20,7 @@ Core.LIMITS = {
     placeDelay = { 0.01, 1, 0.1 }, punchDelay = { 0.001, 1, 0.03 },
     collectDelay = { 0.001, 5, 0.001 }, actionTimeout = { 5, 30, 10 },
     moveTimeout = { 5, 180, 90 }, seedThreshold = { 1, 200, 200 },
-    collectRange = { 0.5, 5, 2 }, walkSpeed = { 0.2, 1, 0.5 },
+    collectRange = { 0.5, 5, 2 }, walkSpeed = { 0.2, 1, 1 },
 }
 -- autoBoost: delay efektif naik sendiri kalau terdeteksi miss (bawaan MATI supaya delay yang diatur dipakai apa adanya).
 Core.BOOLS = { antiAFK = true, autoRejoin = true, autoCollect = false, autoBoost = false }
@@ -109,7 +109,7 @@ function Core.validate(input)
     local oldDelays = options.delayRev ~= Core.DELAY_REV
     for key, limit in pairs(Core.LIMITS) do
         local value = options[key]
-        if oldDelays and (key == "placeDelay" or key == "punchDelay" or key == "moveTimeout") then value = nil end -- pakai bawaan baru
+        if oldDelays and (key == "placeDelay" or key == "punchDelay" or key == "moveTimeout" or key == "walkSpeed") then value = nil end -- pakai bawaan baru
         if value ~= nil then
             if Core.DELAYS[key] and finite(value) and value >= 0 and value < limit[1] then value = limit[1] end
             assert(finite(value) and value >= limit[1] and value <= limit[2], "Setting tidak valid: " .. key)
