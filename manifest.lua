@@ -1,7 +1,7 @@
 -- manifest.lua: daftar modul + urutan muat. Tambah file baru = cukup tambah satu baris di sini.
 -- Format tiap baris: { nama modul, path file di repo }.
 return {
-    version = "0.9.3",
+    version = "0.9.5",
     modules = {
         -- core: logika murni, tidak menyentuh game
         { "core",        "src/core/core.lua" },

@@ -150,8 +150,11 @@ return function(modules, VERSION)
                     .. (#errors > 0 and ("; checkpoint error: " .. table.concat(errors, ", ")) or "")
             end)(),
             "Jangkauan pungut server: " .. G.Drops.reachText(),
-            "Delay Put & Break: " .. tostring(App.config.options.placeDelay) .. "s, boost otomatis x"
-                .. string.format("%.2f", App.delayBoost or 1) .. ", miss terdeteksi " .. tostring(App.delayMisses or 0) .. "x",
+            "Delay Place: " .. tostring(App.config.options.placeDelay) .. "s, Delay Break: " .. tostring(App.config.options.punchDelay)
+                .. "s, auto boost " .. (App.config.options.autoBoost and "NYALA" or "mati") .. " x"
+                .. string.format("%.2f", App.delayBoost or 1) .. ", miss terdeteksi " .. tostring(App.delayMisses or 0)
+                .. "x, penghalang dihancurkan " .. tostring(App.pnbObstacles or 0) .. "x",
+            "Kecepatan jalan panen & tanam: x" .. tostring(App.config.options.walkSpeed) .. ", batas waktu jalan " .. tostring(App.config.options.moveTimeout) .. "s",
             "Panen: jangkauan pukul sambil jalan " .. string.format("%.2f", App.harvestReach or 1.5) .. " tile, pohon miss " .. tostring(App.harvestMisses or 0) .. "x",
             "Stock terakhir: " .. tostring(App.stockDebug or "-"),
             "Auto collect: " .. (App.config and App.config.options.autoCollect and "semua item" or "idle off") .. ", saat PNB/Rotation SELALU (blok & gem), mode " .. G.AutoCollect.mode() .. ", jangkauan "

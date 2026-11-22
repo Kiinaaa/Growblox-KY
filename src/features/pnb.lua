@@ -160,16 +160,18 @@ return function(G)
         end
     end
 
-    -- v0.9: SATU delay untuk semua Put & Break (options.placeDelay; punch & Rotation disamakan oleh Core.setDelay).
-    -- Delay efektif = delay x App.delayBoost. Boost naik sendiri kalau terdeteksi MISS (place tidak muncul di server,
-    -- atau blok tidak pecah setelah beberapa kali pukul), lalu turun pelan-pelan kalau semuanya aman.
+    -- v0.9.5: DUA delay terpisah. Place delay (placeDelay) = jeda sebelum place ulang di tile kosong.
+    -- Break delay (punchDelay) = jeda antar pukulan DAN tunggu setelah place sebelum dipukul (tanpa batas bawah paksa).
+    -- Boost otomatis (opsional, toggle "Auto naikkan delay kalau miss") mengalikan keduanya; kalau mati, delay dipakai apa adanya.
     App.delayBoost = App.delayBoost or 1
-    local function safeDelay(opts)
-        return math.max(opts.placeDelay or 0.1, opts.punchDelay or 0.1) * App.delayBoost
+    local function boost()
+        return (App.config.options.autoBoost and App.delayBoost) or 1
     end
-    Pnb.safeDelay = safeDelay
-    -- v0.9.4: boost tidak lagi menumpuk sampai 3x dan lama turun (dulu -0.02 per putaran = berpuluh detik
-    -- tetap lambat). Sekarang maks 1.6x, naik 1.15x per miss, turun 10% per putaran bersih.
+    local function placeGapOf(opts) return math.max(0.001, opts.placeDelay or 0.1) * boost() end
+    local function breakGapOf(opts) return math.max(0.001, opts.punchDelay or 0.03) * boost() end
+    Pnb.placeGap, Pnb.breakGap = placeGapOf, breakGapOf
+    function Pnb.safeDelay(opts) return math.max(placeGapOf(opts), breakGapOf(opts)) end
+    -- Boost: maks 1.6x, naik 1.15x per miss, turun 10% per putaran bersih (hanya berpengaruh kalau autoBoost nyala).
     local function raiseBoost()
         App.delayBoost = math.min(1.6, App.delayBoost * 1.15)
         App.delayMisses = (App.delayMisses or 0) + 1
@@ -206,26 +208,59 @@ return function(G)
     end
 
     -- PIPELINE: tiap frame, tiap tile diperlakukan sendiri: kosong -> place, ada blok -> pukul (semua hit sekaligus).
-    -- speed (opsional) = tabel: placeDelay, punchDelay, actionTimeout, collectEvery. avoidSeed (opsional) = id seed:
-    -- tile yang ada seed-nya belum terpungut dilewati (tidak place, tidak pukul) sampai seed itu terpungut.
-    -- Semua jeda diturunkan dari SATU delay (safeDelay):
-    --   kosong  -> tunggu `delay` sejak terlihat kosong -> place -> "placed"
-    --   placed  -> tunggu server memproses (0,3 dtk + delay); tidak boleh place lagi di tile ini. Kalau blok tidak
-    --              pernah muncul = place ditolak (miss): dicatat, tas disinkron, delay otomatis naik.
-    --   block   -> baru dipukul setelah `1.5 x delay` sejak di-place, lalu tiap `delay` sampai pecah.
+    -- v0.9.5:
+    --   * Delay Place & Delay Break TERPISAH (opts.placeDelay / opts.punchDelay). Tidak ada lagi batas bawah 0,12 dtk
+    --     setelah place; tunggu sebelum pukul pertama = Delay Break; jeda antar putaran = 1 frame (bukan 0,05 dtk).
+    --   * PUNGUT drop jalan di thread sendiri (tidak menahan loop place/break menunggu balasan server tiap pickup).
+    --   * Blok LAIN yang menghalangi tile PNB (blok biasa yang bisa dihancurkan, bukan seed/lock/pintu/box) langsung
+    --     DIHANCURKAN. Tile tepat di bawah karakter (lantai berdiri) tidak pernah disentuh.
+    --   * speed (opsional) = tabel: placeDelay, punchDelay, actionTimeout, collectEvery.
+    --   * avoidSeed (opsional) = id seed: tile yang ada seed-nya belum terpungut dilewati sampai seed itu terpungut.
     function Pnb.pipeline(anchor, targets, id, token, speed, avoidSeed, collectIds)
         local r = worldCheck(anchor.world, token)
         local opts = speed or App.config.options
         local timeout = opts.actionTimeout or App.config.options.actionTimeout or 10
         local hitsNeeded = r.items[id].hits or 1
         local burst = math.max(1, math.min(hitsNeeded, 8))
-        local stallRounds = math.ceil(hitsNeeded / burst) + 6 -- pukulan sebanyak ini tanpa pecah = miss (v0.9.4: lebih longgar)
+        local stallRounds = math.ceil(hitsNeeded / burst) + 6 -- pukulan sebanyak ini tanpa pecah = miss
         local roundStart, lastProgress = os.clock(), os.clock()
         local phase, placedAt, hitAt, emptyAt, bursts = {}, {}, {}, {}, {}
         local rejected, stalled = 0, 0
         local pipeAttempts = {}
-        local seedCache, seedCacheAt, collectAt = nil, nil, 0
+        local seedCache, seedCacheAt = nil, nil
+        -- pungut di thread sendiri
+        local collecting, collectedAny, collectProblem, collectAt = false, false, nil, 0
+        local function drain()
+            local deadline = os.clock() + (App.config.options.actionTimeout or 10) + 2
+            while collecting and os.clock() < deadline do Net.tick(token) end
+        end
+        local function startCollect()
+            collecting = true
+            local probing = App.reach.no == 0
+            local area = probing and { radius = 2.75, up = 3, down = 2.5 } or Drops.reach()
+            task.spawn(function()
+                local ok, got = pcall(Drops.collectNear, anchor, collectIds, token, { radius = area.radius, up = area.up,
+                    down = area.down, fast = true, noWait = true, attempts = pipeAttempts, maxAttempts = probing and 1 or 2 })
+                collecting = false
+                if ok then
+                    for _, amount in pairs(got or {}) do
+                        if amount > 0 then collectedAny = true; App.pnbCollected = (App.pnbCollected or 0) + amount end
+                    end
+                elseif not tostring(got):find("Stopped", 1, true) then
+                    collectProblem = got
+                end
+            end)
+        end
+        -- blok lain di tile PNB yang boleh dihancurkan (nil = tidak boleh)
+        local function obstacleItem(now, point)
+            if now == 0 or now == id or now == avoidSeed then return nil end
+            if point.x == anchor.x and point.y == anchor.y + 1 then return nil end -- lantai tempat berdiri
+            local item = r.items[now]
+            if Core.farmable(item) then return item end
+            return nil
+        end
         local function finish()
+            drain()
             -- blok yang pecah tepat di akhir putaran ikut dihitung (kalau tidak, hilang dari statistik)
             for index, point in ipairs(targets) do
                 if phase[index] == "block" and tileAt(point.x, point.y) == 0 then
@@ -242,6 +277,12 @@ return function(G)
         while true do
             checkpoint(token)
             worldCheck(anchor.world, token)
+            if collectProblem then
+                local problem = collectProblem
+                collectProblem = nil
+                drain()
+                error(problem, 0)
+            end
             local state = position()
             if not (state.grounded and math.abs(state.x - (anchor.x + 0.5)) < 0.3 and math.abs(state.y - (anchor.y + 1)) < 0.3) then
                 holdAnchor(anchor, token)
@@ -249,14 +290,14 @@ return function(G)
                 state = position()
             end
             local facing = (state.facing or 1) < 0
-            -- dibaca ulang tiap putaran: slider delay & boost otomatis langsung berlaku tanpa stop.
+            -- dibaca ulang tiap putaran: slider Delay Place / Delay Break langsung berlaku tanpa stop.
             opts = speed or App.config.options
-            local delay = safeDelay(opts)
-            local hitGap, replaceDelay, grace = delay, delay, math.max(0.12, delay * 1.5)
-            local pendingTimeout = 0.5 + delay -- v0.9.4: balasan server untuk 6+ place sekaligus bisa >0,3 dtk; jangan dianggap ditolak
-            local collectEvery = opts.collectEvery or math.max(0.8, delay * 8)
-            local stagger, tick = math.min(0.02, delay / 3), math.max(0.016, math.min(delay / 2, 0.05))
-            -- v0.9.4: daftar seed di lantai dibaca ulang tiap 0,1 dtk saja (dulu tiap frame = scan dropList terus-menerus)
+            local placeGap, hitGap = placeGapOf(opts), breakGapOf(opts)
+            local grace = hitGap -- tunggu setelah place sebelum pukul pertama = Delay Break
+            local pendingTimeout = 0.5 + placeGap -- balasan server untuk banyak place sekaligus bisa lambat; jangan dianggap ditolak
+            local collectEvery = opts.collectEvery or 2.5
+            local stagger = math.min(0.02, placeGap / 3)
+            -- daftar seed di lantai dibaca ulang tiap 0,1 dtk saja (bukan tiap frame)
             local seeds
             if avoidSeed then
                 if not seedCacheAt or os.clock() - seedCacheAt >= 0.1 then
@@ -277,6 +318,10 @@ return function(G)
                         phase[index], placedAt[index], hitAt[index], emptyAt[index], bursts[index] = nil, nil, nil, t, nil
                         App.stats.broken = App.stats.broken + 1
                         progressed, ph = true, nil
+                    elseif ph == "obstacle" then -- penghalang sudah hancur
+                        phase[index], hitAt[index], bursts[index], emptyAt[index] = nil, nil, nil, t
+                        App.pnbObstacles = (App.pnbObstacles or 0) + 1
+                        progressed, ph = true, nil
                     elseif ph == "placed" and t - placedAt[index] >= pendingTimeout then -- place tidak pernah muncul
                         phase[index], placedAt[index], emptyAt[index] = nil, nil, t
                         rejected, ph = rejected + 1, nil
@@ -287,7 +332,7 @@ return function(G)
                         avoided, emptyAt[index] = true, nil -- ada seed di tile ini: jangan put di sini
                     else
                         emptyAt[index] = emptyAt[index] or t
-                        if count(id) > 0 and t - emptyAt[index] >= replaceDelay then
+                        if count(id) > 0 and t - emptyAt[index] >= placeGap then
                             if r.handlers.canPlace(r.items[id], point.x, point.y) then
                                 r.handlers.setTile("fg", point.x, point.y, id, false, facing)
                                 r.inventory:remove(id, 1)
@@ -316,32 +361,36 @@ return function(G)
                             end
                         end
                     end
+                else
+                    -- blok lain menghalangi tile ini: hancurkan saja
+                    local item = (not blocked) and obstacleItem(now, point) or nil
+                    if item then
+                        usable, active = true, true
+                        phase[index], emptyAt[index] = "obstacle", nil
+                        if t - (hitAt[index] or 0) >= hitGap then
+                            hitAt[index] = t
+                            for _ = 1, math.max(1, math.min(item.hits or 1, 8)) do
+                                if tileAt(point.x, point.y) ~= now then break end
+                                r.handlers.hit(point.x, point.y)
+                            end
+                        end
+                    end
                 end
             end
-            -- v0.9.1: PUNGUT LANGSUNG. Begitu ada drop yang siap (dari blok yang baru pecah, tile mana pun),
-            -- langsung dipungut di putaran ini juga; tidak menunggu tile lain pecah / putaran selesai.
-            -- Drop yang belum siap tidak ditunggu (dicek lagi putaran berikutnya). Yang di luar jangkauan
-            -- server diurus Pnb.collect (jalan) di akhir.
-            -- v0.9.4: pungut dicek tiap 0,1 dtk (bukan tiap frame): iterasi dropList + request pickup per frame
-            -- membuat loop break berat saat banyak drop di lantai.
-            if collectIds and os.clock() - collectAt >= 0.1 then
+            -- PUNGUT di thread sendiri (tiap 0,1 dtk, tidak menumpuk): loop place/break tidak menunggu balasan server.
+            if collectIds and not collecting and os.clock() - collectAt >= 0.1 then
                 collectAt = os.clock()
-                local probing = App.reach.no == 0
-                local area = probing and { radius = 2.75, up = 3, down = 2.5 } or Drops.reach()
-                local got = Drops.collectNear(anchor, collectIds, token, { radius = area.radius, up = area.up,
-                    down = area.down, fast = true, noWait = true, attempts = pipeAttempts, maxAttempts = probing and 1 or 2 })
-                for _, amount in pairs(got or {}) do
-                    if amount > 0 then progressed = true; App.pnbCollected = (App.pnbCollected or 0) + amount end
-                end
+                startCollect()
             end
-            assert(usable, "Semua tile PNB terhalang blok lain. Kosongkan tile yang dipilih atau pilih tile lain.")
+            if collectedAny then collectedAny, progressed = false, true end
+            assert(usable, "Semua tile PNB terhalang blok yang tidak bisa dihancurkan. Kosongkan tile yang dipilih atau pilih tile lain.")
             if progressed then lastProgress = os.clock() end
             -- tidak ada kerjaan lagi (blok habis, atau sisa tile tertahan seed): kembali supaya pemanggil memungut dulu
             if not active and (count(id) == 0 or avoided) then finish(); return end
             if os.clock() - roundStart >= collectEvery and not waiting then finish(); return end
             assert(os.clock() - lastProgress < timeout,
                 "Place & Break macet: tidak ada kemajuan. Cek izin dan jangkauan pukul.")
-            pause(tick, token)
+            Net.tick(token) -- satu frame (bukan jeda tetap 0,05 dtk)
         end
     end
 
@@ -591,10 +640,46 @@ return function(G)
         Pnb.panels[spec.key] = gui
     end
 
+    -- v0.9.5: slider Delay Place & Delay Break (terpisah). Dipakai di tab Place & Break DAN tab Rotation;
+    -- semua slider yang tampil disinkronkan, dan langsung berlaku saat task jalan (pipeline membaca ulang tiap frame).
+    Pnb.delayControls, Pnb.delaySyncing = {}, false
+    function Pnb.syncDelaySliders()
+        Pnb.delaySyncing = true
+        for _, entry in ipairs(Pnb.delayControls) do
+            local want = App.config.options[entry.key]
+            if entry.shown ~= want then
+                entry.shown = want
+                pcall(function() entry.slider:Set(want) end)
+            end
+        end
+        Pnb.delaySyncing = false
+    end
+    function Pnb.addDelaySliders(tab)
+        local specs = {
+            { key = "placeDelay", title = "Delay Place (detik)", step = 0.005, setter = Core.setPlaceDelay,
+                desc = "Jeda sebelum blok ditaruh lagi di tile yang baru kosong. Langsung berlaku saat jalan." },
+            { key = "punchDelay", title = "Delay Break (detik)", step = 0.001, setter = Core.setBreakDelay,
+                desc = "Jeda antar pukulan, dan tunggu setelah place sebelum dipukul. Makin kecil makin cepat. Kalau ada blok yang tidak pecah / miss, naikkan sedikit. Berlaku untuk Place & Break dan PNB di Rotation. Langsung berlaku saat jalan." },
+        }
+        for _, spec in ipairs(specs) do
+            local limit = Core.LIMITS[spec.key]
+            local entry = { key = spec.key, shown = App.config.options[spec.key] }
+            entry.slider = tab:Slider({ Title = spec.title, Step = spec.step, Desc = spec.desc,
+                Value = { Min = limit[1], Max = limit[2], Default = App.config.options[spec.key] },
+                Callback = function(value)
+                    if Pnb.delaySyncing then return end
+                    local ok, message = pcall(function() spec.setter(App.config, tonumber(value)); State.saveSession() end)
+                    if not ok then G.notify(tostring(message)) end
+                    entry.shown = App.config.options[spec.key]
+                    Pnb.syncDelaySliders()
+                end })
+            table.insert(Pnb.delayControls, entry)
+        end
+    end
+
     function Pnb.buildTab(tab)
         local UI = G.UI
         local controls, blockLookup, syncing = {}, {}, true
-        local shown = { delay = App.config.options.placeDelay }
 
         local function refreshBlocks()
             if not App.runtime then return end
@@ -615,13 +700,7 @@ return function(G)
             UI.paragraph(controls.grid, "PNB tiles", Pnb.gridText())
             UI.paragraph(controls.stock, "Stock (Display Box)", G.Storage.pointText(App.config.points.stock))
             UI.paragraph(controls.drop, "Seed drop (Display Box)", G.Storage.pointText(App.config.points.seedDrop))
-            syncing = true
-            local slider, want = controls.delay, App.config.options.placeDelay
-            if slider and shown.delay ~= want then
-                shown.delay = want
-                pcall(function() slider:Set(want) end)
-            end
-            syncing = false
+            Pnb.syncDelaySliders()
         end
         local function setOption(fn)
             if syncing then return end
@@ -645,10 +724,10 @@ return function(G)
         G.Jobs.toggles.pnb = tab:Toggle({ Title = "Place & Break", Value = false,
             Desc = "Posisi PNB = tempat lo berdiri saat toggle dinyalakan.",
             Callback = function(enabled) G.Jobs.setRunning("pnb", enabled) end })
-        controls.delay = tab:Slider({ Title = "Delay Put & Break (detik)", Step = 0.01,
-            Desc = "SATU delay untuk place dan break (juga dipakai Rotation). Bawaan 0.1 sudah aman. Kalau script mendeteksi miss, delay efektif naik sendiri otomatis lalu turun lagi kalau aman. Langsung berlaku saat jalan.",
-            Value = { Min = Core.LIMITS.placeDelay[1], Max = Core.LIMITS.placeDelay[2], Default = App.config.options.placeDelay },
-            Callback = function(value) liveOption(function() Core.setDelay(App.config, tonumber(value)) end) end })
+        Pnb.addDelaySliders(tab)
+        controls.autoBoost = tab:Toggle({ Title = "Auto naikkan delay kalau miss", Value = App.config.options.autoBoost == true,
+            Desc = "MATI (bawaan) = Delay Place & Delay Break dipakai apa adanya. NYALA = kalau script mendeteksi place/pukul yang miss, delay efektif naik sendiri (maks 1.6x) lalu turun lagi. Langsung berlaku.",
+            Callback = function(enabled) liveOption(function() App.config.options.autoBoost = enabled == true end) end })
 
         pcall(function() tab:Section({ Title = "Auto Collect" }) end)
         controls.autoCollect = tab:Toggle({ Title = "Auto Collect", Value = App.config.options.autoCollect,

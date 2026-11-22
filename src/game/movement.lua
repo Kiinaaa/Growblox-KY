@@ -102,7 +102,7 @@ return function(G)
         local hold = Movement.takeControls()
         local targetX, targetY = x + 0.5, y + 1
         local farmNavigation = App.job == "plant" or App.job == "harvest" or App.job == "rotation"
-        local timeout = farmNavigation and math.max(90, App.config.options.moveTimeout) or App.config.options.moveTimeout
+        local timeout = App.config.options.moveTimeout -- v0.9.5: slider "Batas waktu jalan" sekarang benar-benar dipakai (bawaan 90)
         local deadline, banned, replans = os.clock() + timeout, {}, 0
         local function collectionStep(state)
             if not onStep then return true, 0 end
@@ -111,6 +111,21 @@ return function(G)
             local waited = os.clock() - started
             deadline = deadline + waited -- waktu menunggu aksi tidak dihitung sebagai gagal jalan
             return proceed ~= false, waited, proceed == "hold"
+        end
+        -- v0.9.5: BATAS KECEPATAN JALAN. Hanya saat ada onStep (menyapu panen / menanam / mendekati pohon): kecepatan
+        -- horizontal dibatasi walkSpeed x kecepatan penuh (slider di tab Rotation, langsung berlaku). Di atas batas,
+        -- tombol arah dilepas (karakter melambat), di bawahnya jalan lagi. Lompat / turun / di udara tidak dibatasi.
+        local baseSpeed = Movement.navigationMap(r).speed or 7.2
+        local function pace()
+            if not onStep then return 1 end
+            return math.min(1, math.max(0.2, App.config.options.walkSpeed or 1))
+        end
+        local function limited(direction, state, waypoint)
+            local scale = pace()
+            if scale >= 0.999 or direction == 0 or waypoint.jump or waypoint.drop or not state.grounded then return direction end
+            local vx = state.vx or 0
+            if vx * direction > 0 and math.abs(vx) >= baseSpeed * scale then return 0 end
+            return direction
         end
         local function reached(state, tx, ty)
             return state.grounded and math.abs(state.x - tx) < 0.16
@@ -194,6 +209,7 @@ return function(G)
                     else
                         hold.direction = waypoint.drop and Navigation.dropSteer(state, waypoint)
                             or Navigation.steer(waypoint.x + 0.5 - state.x, state.vx or 0, state.grounded and 48 or 17)
+                        hold.direction = limited(hold.direction, state, waypoint)
                         if waypoint.jump and not launchAt and state.grounded then launchAt = os.clock() end
                         if launchAt and not state.grounded then airborne = true end
                         hold.jump = launchAt ~= nil and ((not airborne and os.clock() - launchAt < 0.2)
@@ -201,7 +217,8 @@ return function(G)
                         if math.abs(state.x - movedX) + math.abs(state.y - movedY) > 0.08 then
                             movedX, movedY, movedAt = state.x, state.y, os.clock()
                         end
-                        if os.clock() - movedAt > 1 or os.clock() - began > math.max(2.5, waypoint.duration + 1.5) then
+                        -- batas waktu per langkah ikut diperpanjang saat jalan diperlambat (1 / walkSpeed)
+                        if os.clock() - movedAt > 1 or os.clock() - began > math.max(2.5, waypoint.duration / pace() + 1.5) then
                             failed = waypoint
                             break
                         end

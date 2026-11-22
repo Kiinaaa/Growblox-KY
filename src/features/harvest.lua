@@ -235,14 +235,17 @@ return function(G)
         local name = r.world.name
         local tried, lastAt = {}, -1
         local function key(point) return point.x .. ":" .. point.y end
+        local PLANT_NEAR = 1.25 -- v0.9.5: tile baru ditanam kalau karakter sudah dalam jarak ini (bukan di ujung jangkauan = sering ditolak server)
         local function plantReachable(group)
             local t = os.clock()
             if t - lastAt < math.min(0.03, opts.placeDelay) then return end -- replant tidak ikut delay Put & Break
             lastAt = t
             local n = 0
+            local here = Bridge.position()
             for _, point in ipairs(group) do
                 if state.sent >= seeds or n >= 8 then break end
-                if not tried[key(point)] and tileAt(point.x, point.y) == 0 and r.handlers.plantSeed
+                if not tried[key(point)] and math.abs(here.x - (point.x + 0.5)) <= PLANT_NEAR
+                    and tileAt(point.x, point.y) == 0 and r.handlers.plantSeed
                     and r.handlers.canPlace(r.items[seedId], point.x, point.y) then
                     tried[key(point)] = true
                     r.handlers.plantSeed(seedId, point.x, point.y)

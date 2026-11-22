@@ -5,7 +5,7 @@ local Core = {}
 Core.CONFIG_VERSION = 1
 -- Revisi bawaan delay. Profil lama (tanpa delayRev) menyimpan bawaan 0.001 yang dulu diam-diam dibatasi 0.03/0.05;
 -- sekarang slider dipakai apa adanya, jadi delay lama diganti bawaan baru sekali saja.
-Core.DELAY_REV = 3
+Core.DELAY_REV = 4 -- v0.9.5: delay Place & Break dipisah; delay & moveTimeout lama direset ke bawaan baru sekali
 Core.POINTS = { "pnb", "blockBox", "seedBox", "farmBox", "plantBox", "stock", "seedDrop" }
 -- Titik yang berupa TEMPAT BERDIRI (bukan box), jadi tidak butuh standX/standY.
 Core.STAND_POINTS = { pnb = true }
@@ -15,12 +15,15 @@ Core.COLLECT_FILTERS = { "all", "gems", "crop" }
 Core.LIMITS = {
     -- Delay: tanpa batas bawah berarti, tapi TIDAK boleh 0 (minimum 0.001 detik). Bawaan = secepat mungkin.
     -- v0.9: SATU delay Put & Break (placeDelay; punchDelay & delay Rotation selalu disamakan lewat Core.setDelay).
-    placeDelay = { 0.05, 1, 0.1 }, punchDelay = { 0.05, 1, 0.1 },
+    -- v0.9.5: DUA delay terpisah. placeDelay = jeda sebelum place ulang; punchDelay = DELAY BREAK (jeda antar pukulan
+    -- dan tunggu setelah place sebelum dipukul). walkSpeed = pengali kecepatan jalan saat panen & tanam (1 = penuh).
+    placeDelay = { 0.01, 1, 0.1 }, punchDelay = { 0.001, 1, 0.03 },
     collectDelay = { 0.001, 5, 0.001 }, actionTimeout = { 5, 30, 10 },
-    moveTimeout = { 5, 90, 30 }, seedThreshold = { 1, 200, 200 },
-    collectRange = { 0.5, 5, 2 },
+    moveTimeout = { 5, 180, 90 }, seedThreshold = { 1, 200, 200 },
+    collectRange = { 0.5, 5, 2 }, walkSpeed = { 0.2, 1, 0.5 },
 }
-Core.BOOLS = { antiAFK = true, autoRejoin = true, autoCollect = false }
+-- autoBoost: delay efektif naik sendiri kalau terdeteksi miss (bawaan MATI supaya delay yang diatur dipakai apa adanya).
+Core.BOOLS = { antiAFK = true, autoRejoin = true, autoCollect = false, autoBoost = false }
 -- Setting delay: profil lama yang menyimpan 0 dinaikkan ke minimum, bukan ditolak.
 Core.DELAYS = { placeDelay = true, punchDelay = true, collectDelay = true }
 
@@ -45,7 +48,7 @@ function Core.defaults()
         -- breakLeft: break di ujung KIRI barisan farm (otomatis). breakTiles: tile break relatif ke spot (kosong = otomatis).
         -- placeDelay/punchDelay: kecepatan place & break khusus Rotation (detik, minimum 0.001, tidak boleh 0).
         rotation = { worlds = {}, seedId = 0, blockTarget = 180, pnbTiles = 6, boxes = {},
-            breakLeft = true, breakTiles = {}, placeDelay = 0.1, punchDelay = 0.1,
+            breakLeft = true, breakTiles = {}, placeDelay = options.placeDelay, punchDelay = options.punchDelay,
             harvestAll = false }, -- v0.9: tidak dipakai lagi (target blok selalu berlaku)
         -- PNB: tiles = kotak yang di-place & break, relatif ke posisi berdiri (dx kanan, dy bawah).
         pnb = { tiles = { { dx = 0, dy = -1 } }, autoStock = false, autoDrop = false },
@@ -106,7 +109,7 @@ function Core.validate(input)
     local oldDelays = options.delayRev ~= Core.DELAY_REV
     for key, limit in pairs(Core.LIMITS) do
         local value = options[key]
-        if oldDelays and (key == "placeDelay" or key == "punchDelay") then value = nil end -- pakai bawaan baru
+        if oldDelays and (key == "placeDelay" or key == "punchDelay" or key == "moveTimeout") then value = nil end -- pakai bawaan baru
         if value ~= nil then
             if Core.DELAYS[key] and finite(value) and value >= 0 and value < limit[1] then value = limit[1] end
             assert(finite(value) and value >= limit[1] and value <= limit[2], "Setting tidak valid: " .. key)
@@ -241,23 +244,24 @@ function Core.validate(input)
         assert(type(harvesting.replant) == "boolean", "Setting replant tidak valid.")
         out.harvesting.replant = harvesting.replant
     end
-    -- v0.9: SATU delay Put & Break. Semua delay disamakan dengan placeDelay; harvestAll tidak dipakai lagi.
-    local delay = out.options.placeDelay
-    out.options.punchDelay = delay
-    out.rotation.placeDelay, out.rotation.punchDelay = delay, delay
+    -- v0.9.5: delay Rotation selalu sama dengan delay di options (place & break TERPISAH); harvestAll tidak dipakai lagi.
+    out.rotation.placeDelay, out.rotation.punchDelay = out.options.placeDelay, out.options.punchDelay
     out.rotation.harvestAll = false
     return out
 end
 
--- Set delay Put & Break (satu-satunya). Dipakai slider di tab Place & Break.
-function Core.setDelay(config, value)
-    local limit = Core.LIMITS.placeDelay
+-- Set delay Place / delay Break (terpisah). Dipakai slider di tab Place & Break dan tab Rotation.
+local function setOneDelay(config, key, value)
+    local limit = Core.LIMITS[key]
     assert(finite(value), "Delay tidak valid.")
     value = math.min(limit[2], math.max(limit[1], value))
-    config.options.placeDelay, config.options.punchDelay = value, value
-    config.rotation.placeDelay, config.rotation.punchDelay = value, value
+    config.options[key] = value
+    config.rotation[key] = value
     return value
 end
+function Core.setPlaceDelay(config, value) return setOneDelay(config, "placeDelay", value) end
+function Core.setBreakDelay(config, value) return setOneDelay(config, "punchDelay", value) end
+Core.setDelay = Core.setPlaceDelay -- nama lama
 
 -- Seed dari sebuah blok. Growblox: seedId tertulis di definisi item, atau blockId + 1.
 -- Kebalikan seedId: blok hasil panen dari sebuah seed (biasanya id seed - 1).

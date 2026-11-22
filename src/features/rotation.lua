@@ -222,9 +222,13 @@ return function(G)
             local list = {}
             for _, offset in ipairs(custom) do
                 local x, y = here.x + offset.dx, here.y + offset.dy
-                if x >= 0 and x < r.world.w and y >= 0 and y < r.world.h and tileAt(x, y) == 0
-                    and not Pnb.seedOnTile(seeds, x, y) and r.handlers.canPlace(r.items[blockId], x, y) then
-                    table.insert(list, { x = x, y = y })
+                if x >= 0 and x < r.world.w and y >= 0 and y < r.world.h and not Pnb.seedOnTile(seeds, x, y) then
+                    local inside = tileAt(x, y)
+                    if inside == 0 then
+                        if r.handlers.canPlace(r.items[blockId], x, y) then table.insert(list, { x = x, y = y }) end
+                    elseif inside ~= blockId and not (offset.dx == 0 and offset.dy == 1) and Core.farmable(r.items[inside]) then
+                        table.insert(list, { x = x, y = y }) -- v0.9.5: penghalang dihancurkan oleh pipeline, lalu dipakai PNB
+                    end
                 end
             end
             if #list > 0 then return list end
@@ -325,8 +329,7 @@ return function(G)
             local planted = false
             for _, tile in ipairs(tiles) do
                 local inside = tileAt(tile.x, tile.y)
-                assert(inside == 0 or inside == blockId or inside == seedId,
-                    "Tile PNB rotasi terisi item lain di " .. tile.x .. ", " .. tile.y .. ".")
+                -- v0.9.5: isi lain yang bisa dihancurkan dihancurkan oleh pipeline; yang tidak bisa dilewati.
                 if inside == seedId then planted = true end
             end
             if planted then break end -- tile PNB sudah ditanam saat replant karena seed penuh
@@ -454,7 +457,8 @@ return function(G)
     -- Return: jumlah pohon dipanen di world ini, dan detik sampai pohon tercepat berikutnya mateng.
     function Rotation.runWorld(index, token)
         local cfg = App.config.rotation
-        local name, target = cfg.worlds[index], cfg.blockTarget
+        local name = cfg.worlds[index]
+        local function target() return cfg.blockTarget end -- dibaca ulang tiap dipakai: slider langsung berlaku
         App.rotationIndex = index
         Rotation.saveResume()
         -- Masuk + scan otomatis: tanaman = seed terbanyak di world, Display Box dicari otomatis.
@@ -528,10 +532,10 @@ return function(G)
             end
             local function full()
                 if r.inventory:room(blockId) < 5 then return true end
-                return available() >= target and extra <= 0
+                return available() >= target() and extra <= 0
             end
             if not full() then
-                progress("harvest (" .. plan.ripe .. " pohon mateng, break kalau blok >= " .. target .. ")")
+                progress("harvest (" .. plan.ripe .. " pohon mateng, break kalau blok >= " .. target() .. ")")
                 -- v0.9.4: panen pertama = dari baris paling atas, mulai dari ujung kiri; selanjutnya baris terdekat dulu
                 local ordered = firstPass and topDownRows(plan.rows) or Rotation.nearestRows(plan.rows, standing())
                 local leadIn = firstPass
@@ -560,7 +564,7 @@ return function(G)
                             lastPoint = point
                             table.insert(harvested, point)
                             stats.harvested = stats.harvested + 1
-                            if count(blockId) >= target then extra = extra - 1 end
+                            if count(blockId) >= target() then extra = extra - 1 end
                         end
                         -- ambil drop yang sudah siap (tanpa menunggu); sisanya ikut di potongan berikutnya / akhir baris
                         if #done > 0 then soft(token, name, function() quickCollect(standing(), ids, token, false) end) end
@@ -724,7 +728,6 @@ return function(G)
 
     -- Pilih/batal pilih tile break (relatif ke spot di kiri barisan farm). Daftar kosong = otomatis.
     function Rotation.toggleBreakTile(dx, dy)
-        Net.idle()
         if dx == 0 and dy == 0 then return end
         local tiles, removed = {}, false
         for _, tile in ipairs(App.config.rotation.breakTiles) do
@@ -754,7 +757,8 @@ return function(G)
             local ok, message = pcall(function() Net.idle(); fn(); State.saveSession() end)
             if not ok then G.notify(tostring(message)) end
         end
-        -- Slider kecepatan: langsung berlaku saat Rotation jalan (tidak perlu stop dulu).
+        -- v0.9.5: hampir semua setting Rotation LANGSUNG berlaku saat jalan (dibaca ulang tiap dipakai); hanya list world
+        -- yang butuh stop dulu. liveOption = tanpa Net.idle.
         local function liveOption(fn)
             if syncing then return end
             local ok, message = pcall(function() fn(); State.saveSession() end)
@@ -777,10 +781,10 @@ return function(G)
         tab:Slider({ Title = "Minimal blok di tas sebelum break", Step = 1,
             Desc = "Panen berhenti begitu blok (di tas + yang sudah jatuh) mencapai angka ini, lalu langsung PNB. Contoh 10 = begitu 10 blok, langsung break.",
             Value = { Min = 1, Max = 200, Default = App.config.rotation.blockTarget },
-            Callback = function(value) setOption(function() App.config.rotation.blockTarget = math.floor(tonumber(value)) end) end })
+            Callback = function(value) liveOption(function() App.config.rotation.blockTarget = math.floor(tonumber(value)) end) end })
         tab:Toggle({ Title = "Break di kiri barisan farm (otomatis)", Value = App.config.rotation.breakLeft ~= false,
             Desc = "Spot break dicari otomatis di ujung kiri barisan farm. Matikan untuk break di tempat berhenti panen.",
-            Callback = function(value) setOption(function() App.config.rotation.breakLeft = value == true end) end })
+            Callback = function(value) liveOption(function() App.config.rotation.breakLeft = value == true end) end })
         controls.grid = tab:Paragraph({ Title = "Tile break (relatif ke spot kiri farm)", Desc = Rotation.breakGridText() })
         tab:Button({ Title = "Set tile break", Desc = "Buka panel 5x5: pilih tile yang di-place & break dari spot. Kosong = otomatis.",
             Callback = function()
@@ -790,14 +794,18 @@ return function(G)
             end })
         tab:Button({ Title = "Reset tile break (otomatis)", Desc = "Hapus pilihan tile; tile dipilih otomatis lagi.",
             Callback = function()
-                setOption(function() App.config.rotation.breakTiles = {} end)
+                liveOption(function() App.config.rotation.breakTiles = {} end)
                 Rotation.refreshTab()
             end })
-        tab:Paragraph({ Title = "Delay Put & Break", Desc = "Pakai SATU delay yang sama dengan tab Place & Break (slider ada di sana). Tidak ada delay terpisah untuk Rotation." })
+        G.Pnb.addDelaySliders(tab) -- Delay Place & Delay Break (sama dengan di tab Place & Break, saling sinkron)
+        tab:Slider({ Title = "Kecepatan jalan saat panen & tanam", Step = 0.05,
+            Desc = "1 = kecepatan penuh. Makin kecil makin pelan (bawaan 0.5) supaya pukulan panen & tanam tidak miss. Hanya dipakai saat menyapu pohon / menanam, jalan jauh tetap normal. Langsung berlaku saat jalan.",
+            Value = { Min = Core.LIMITS.walkSpeed[1], Max = Core.LIMITS.walkSpeed[2], Default = App.config.options.walkSpeed },
+            Callback = function(value) liveOption(function() App.config.options.walkSpeed = math.min(1, math.max(0.2, tonumber(value))) end) end })
         tab:Slider({ Title = "Tile PNB paralel", Step = 1,
             Value = { Min = 1, Max = 12, Default = App.config.rotation.pnbTiles or 6 },
             Desc = "Berapa tile kosong di sekitar karakter yang di-place & break bersamaan. Makin banyak makin cepat.",
-            Callback = function(value) setOption(function() App.config.rotation.pnbTiles = math.floor(tonumber(value)) end) end })
+            Callback = function(value) liveOption(function() App.config.rotation.pnbTiles = math.floor(tonumber(value)) end) end })
         tab:Toggle({ Title = "Replant cepat (tanpa jalan ke tiap tile)", Value = App.rotationFastReplant ~= false,
             Desc = "Tanam tile yang terjangkau langsung dari tempat berdiri. Matikan kalau farm jadi bolong-bolong.",
             Callback = function(value) App.rotationFastReplant = value == true end })
