@@ -115,6 +115,36 @@ return function(G)
     end
     Rotation.nearestRows, Rotation.routeTiles = nearestRows, routeTiles
 
+    -- v0.9.4: URUTAN AWAL DARI UJUNG. Dipakai pada panen pertama tiap kunjungan world: baris paling ATAS dulu,
+    -- dimulai dari pohon mateng paling KIRI di baris itu; baris berikutnya turun ke bawah (zigzag: mulai dari
+    -- ujung yang lebih dekat ke posisi terakhir). Setelah itu urutan kembali rute terdekat (nearestRows).
+    local function topDownRows(rows)
+        local list = {}
+        for _, entry in ipairs(rows) do
+            if #entry.points > 0 then
+                local pts = {}
+                for _, point in ipairs(entry.points) do table.insert(pts, point) end
+                table.sort(pts, function(a, b) return a.x < b.x end)
+                table.insert(list, { row = entry.row, points = pts })
+            end
+        end
+        table.sort(list, function(a, b) return a.points[1].y < b.points[1].y end)
+        local lastX
+        for i, entry in ipairs(list) do
+            if i > 1 then
+                local first, last = entry.points[1], entry.points[#entry.points]
+                if math.abs(lastX - last.x) < math.abs(lastX - first.x) then
+                    local reversed = {}
+                    for n = #entry.points, 1, -1 do table.insert(reversed, entry.points[n]) end
+                    entry.points = reversed
+                end
+            end
+            lastX = entry.points[#entry.points].x
+        end
+        return list
+    end
+    Rotation.topDownRows = topDownRows
+
     -- Simpan HANYA seed ke box world ini (blok tetap di tas untuk PNB). keep = seed yang disisakan.
     function Rotation.storeSeeds(blockId, seedId, keep, token, box)
         refreshInventory(token)
@@ -266,8 +296,10 @@ return function(G)
         local ids = { blockId, seedId, Drops.GEM }
         -- dibaca ulang tiap putaran: slider kecepatan di tab Rotation langsung berlaku tanpa stop
         local function currentSpeed()
+            -- v0.9.4: collectEvery 2.5 dtk: pipeline tidak keluar-masuk tiap 0,8 dtk (tiap keluar, semua tile
+            -- kosong menunggu delay lagi dari nol = terasa lag).
             return { placeDelay = cfg.placeDelay, punchDelay = cfg.punchDelay,
-                actionTimeout = App.config.options.actionTimeout }
+                actionTimeout = App.config.options.actionTimeout, collectEvery = 2.5 }
         end
         info(string.format("PNB di %d,%d (%d tile paralel): %d blok...", here.x, here.y, #tiles, count(blockId)))
         local stuck, last = 0, count(blockId) + blocksInTiles(tiles, blockId)
@@ -441,6 +473,7 @@ return function(G)
         -- extra = pohon yang tetap dipanen walau blok sudah >= target. Dipakai kalau PNB tidak
         -- menemukan tile kosong di samping: panen 2 pohon lagi supaya ada tile kosong untuk PNB.
         local extra = 0
+        local firstPass = true -- v0.9.4: panen pertama di world ini mulai dari ujung (atas, kiri)
         -- dipakai juga untuk laporan; diulang dari scan setelah error tidak menghapus hitungan putaran ini
         local function progress(phase)
             info(string.format("Rotasi %s (%d/%d) - %s | dipanen %d, PNB %d blok, ditanam ulang %d",
@@ -499,7 +532,16 @@ return function(G)
             end
             if not full() then
                 progress("harvest (" .. plan.ripe .. " pohon mateng, break kalau blok >= " .. target .. ")")
-                for _, entry in ipairs(Rotation.nearestRows(plan.rows, standing())) do -- v0.9.2: baris terdekat dulu
+                -- v0.9.4: panen pertama = dari baris paling atas, mulai dari ujung kiri; selanjutnya baris terdekat dulu
+                local ordered = firstPass and topDownRows(plan.rows) or Rotation.nearestRows(plan.rows, standing())
+                local leadIn = firstPass
+                for _, entry in ipairs(ordered) do
+                    if leadIn and entry.points[1] then
+                        leadIn = false
+                        local start = entry.points[1]
+                        progress(string.format("jalan ke ujung farm (%d,%d) untuk mulai panen", start.x, start.y))
+                        soft(token, name, function() Movement.moveTo(start.x, start.y, name, token) end)
+                    end
                     local lastPoint
                     -- v0.8.6: pohon dipanen dalam sapuan kontinu per potongan (10 pohon; 3 kalau mode target blok),
                     -- bukan berhenti & rem di tiap pohon. Tas/seed dicek di antara potongan.
@@ -538,6 +580,7 @@ return function(G)
                     end
                     if full() then break end
                 end
+                if #ordered > 0 then firstPass = false end
                 -- cek ulang: pohon mateng yang miss didatangi lagi
                 retryMissed(harvested, full)
                 -- sisa drop di sekitar pohon yang barusan dipanen

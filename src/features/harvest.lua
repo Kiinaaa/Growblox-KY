@@ -107,6 +107,11 @@ return function(G)
     -- v0.9.2: jangkauan pukul sambil jalan ADAPTIF. Kalau setelah sapuan masih ada pohon berdiri (miss, pukulan dari
     -- jauh ditolak server), jangkauan dikecilkan (min 0.5 tile); kalau bersih, pelan-pelan dinaikkan lagi (maks 1.5).
     local hitReach = 1.5
+    -- v0.9.4: ANTI MISS. Kalau ada pohon mateng yang sudah dipukul dan masih berdiri dalam HOLD_REACH tile,
+    -- karakter BERHENTI di situ (return "hold" ke Movement) sampai pohon pecah, maksimal HOLD_MAX detik per
+    -- pohon (lewat dari itu dilepas supaya tidak macet; pohon itu diselesaikan retryMissed). Jalan tetap
+    -- cepat di antara pohon; yang diperlambat cuma saat tepat di pohon.
+    local HOLD_REACH, HOLD_MAX = 0.9, 0.8
     local function harvestTree(r, point, seedId, resolver, token)
         local name = r.world.name
         if tileAt(point.x, point.y) ~= seedId or not resolver.ripe(point.x, point.y, seedId) then return false end
@@ -149,7 +154,7 @@ return function(G)
         local item = r.items[seedId]
         local burst = math.max(1, math.min(item and item.hits or 1, 4))
         local gap = math.min(opts.punchDelay, 0.05) -- panen tidak ikut delay Put & Break
-        local alive, hitAt = {}, {}
+        local alive, hitAt, heldSince = {}, {}, {}
         for _, point in ipairs(points) do
             if tileAt(point.x, point.y) == seedId and resolver.ripe(point.x, point.y, seedId) then table.insert(alive, point) end
         end
@@ -181,16 +186,24 @@ return function(G)
             if #alive == 0 then return false end -- semua sudah pecah: berhenti jalan
             if shouldStop(changed) then return false end -- target blok tercapai: berhenti jalan
             local t = os.clock()
+            local holding = false
             for _, point in ipairs(alive) do
-                if math.abs(state.x - (point.x + 0.5)) <= hitReach and math.abs(state.y - (point.y + 1)) <= 1.25
-                    and t - (hitAt[point] or -1) >= gap then
+                local dx = math.abs(state.x - (point.x + 0.5))
+                local inY = math.abs(state.y - (point.y + 1)) <= 1.25
+                if dx <= hitReach and inY and t - (hitAt[point] or -1) >= gap then
                     hitAt[point] = t
                     for _ = 1, burst do
                         if tileAt(point.x, point.y) ~= seedId then break end
                         r.handlers.hit(point.x, point.y)
                     end
                 end
+                -- sudah dekat & masih berdiri setelah dipukul: tahan karakter di sini sampai pecah
+                if dx <= HOLD_REACH and inY and hitAt[point] and tileAt(point.x, point.y) == seedId then
+                    heldSince[point] = heldSince[point] or t
+                    if t - heldSince[point] <= HOLD_MAX then holding = true end
+                end
             end
+            if holding then return "hold" end
         end
         local last = alive[#alive]
         Movement.moveTo(last.x, last.y, name, token, strike)

@@ -168,11 +168,13 @@ return function(G)
         return math.max(opts.placeDelay or 0.1, opts.punchDelay or 0.1) * App.delayBoost
     end
     Pnb.safeDelay = safeDelay
+    -- v0.9.4: boost tidak lagi menumpuk sampai 3x dan lama turun (dulu -0.02 per putaran = berpuluh detik
+    -- tetap lambat). Sekarang maks 1.6x, naik 1.15x per miss, turun 10% per putaran bersih.
     local function raiseBoost()
-        App.delayBoost = math.min(3, App.delayBoost * 1.25)
+        App.delayBoost = math.min(1.6, App.delayBoost * 1.15)
         App.delayMisses = (App.delayMisses or 0) + 1
     end
-    local function easeBoost() App.delayBoost = math.max(1, App.delayBoost - 0.02) end
+    local function easeBoost() App.delayBoost = math.max(1, App.delayBoost * 0.9) end
 
     -- v0.9: seed yang masih tergeletak (belum terpungut). Tile yang ada seed-nya TIDAK di-place / dipukul dulu.
     function Pnb.seedDrops(r, seedId)
@@ -217,11 +219,12 @@ return function(G)
         local timeout = opts.actionTimeout or App.config.options.actionTimeout or 10
         local hitsNeeded = r.items[id].hits or 1
         local burst = math.max(1, math.min(hitsNeeded, 8))
-        local stallRounds = math.ceil(hitsNeeded / burst) + 3 -- pukulan sebanyak ini tanpa pecah = miss
+        local stallRounds = math.ceil(hitsNeeded / burst) + 6 -- pukulan sebanyak ini tanpa pecah = miss (v0.9.4: lebih longgar)
         local roundStart, lastProgress = os.clock(), os.clock()
         local phase, placedAt, hitAt, emptyAt, bursts = {}, {}, {}, {}, {}
         local rejected, stalled = 0, 0
         local pipeAttempts = {}
+        local seedCache, seedCacheAt, collectAt = nil, nil, 0
         local function finish()
             -- blok yang pecah tepat di akhir putaran ikut dihitung (kalau tidak, hilang dari statistik)
             for index, point in ipairs(targets) do
@@ -250,11 +253,18 @@ return function(G)
             opts = speed or App.config.options
             local delay = safeDelay(opts)
             local hitGap, replaceDelay, grace = delay, delay, math.max(0.12, delay * 1.5)
-            local pendingTimeout = 0.3 + delay
+            local pendingTimeout = 0.5 + delay -- v0.9.4: balasan server untuk 6+ place sekaligus bisa >0,3 dtk; jangan dianggap ditolak
             local collectEvery = opts.collectEvery or math.max(0.8, delay * 8)
-            local stagger, tick = math.min(0.03, delay / 2), math.max(0.016, math.min(delay / 2, 0.05))
-            local seeds = avoidSeed and Pnb.seedDrops(r, avoidSeed) or nil
-            if seeds and #seeds == 0 then seeds = nil end
+            local stagger, tick = math.min(0.02, delay / 3), math.max(0.016, math.min(delay / 2, 0.05))
+            -- v0.9.4: daftar seed di lantai dibaca ulang tiap 0,1 dtk saja (dulu tiap frame = scan dropList terus-menerus)
+            local seeds
+            if avoidSeed then
+                if not seedCacheAt or os.clock() - seedCacheAt >= 0.1 then
+                    seedCache, seedCacheAt = Pnb.seedDrops(r, avoidSeed), os.clock()
+                end
+                seeds = seedCache
+                if seeds and #seeds == 0 then seeds = nil end
+            end
             local usable, active, progressed, waiting, avoided = false, false, false, false, false
             local t = os.clock()
             for index, point in ipairs(targets) do
@@ -312,7 +322,10 @@ return function(G)
             -- langsung dipungut di putaran ini juga; tidak menunggu tile lain pecah / putaran selesai.
             -- Drop yang belum siap tidak ditunggu (dicek lagi putaran berikutnya). Yang di luar jangkauan
             -- server diurus Pnb.collect (jalan) di akhir.
-            if collectIds then
+            -- v0.9.4: pungut dicek tiap 0,1 dtk (bukan tiap frame): iterasi dropList + request pickup per frame
+            -- membuat loop break berat saat banyak drop di lantai.
+            if collectIds and os.clock() - collectAt >= 0.1 then
+                collectAt = os.clock()
                 local probing = App.reach.no == 0
                 local area = probing and { radius = 2.75, up = 3, down = 2.5 } or Drops.reach()
                 local got = Drops.collectNear(anchor, collectIds, token, { radius = area.radius, up = area.up,
