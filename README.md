@@ -2,7 +2,7 @@
 
 Yang dijalankan di executor hanya loader:
 
-    loadstring(game:HttpGet("https://raw.githubusercontent.com/kiinaaa/growblox-ky/main/loader.lua"))()
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/USERNAME/REPO/main/loader.lua"))()
 
 ## Struktur
     loader.lua          satu-satunya file yang dijalankan (unduh manifest + semua modul, lalu jalankan main)

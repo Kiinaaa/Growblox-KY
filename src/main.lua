@@ -279,7 +279,6 @@ return function(modules, VERSION)
             pcall(G.UI.refresh)
             -- v0.9.6: selama task jalan, pastikan kontrol karakter masih terpasang (game bisa memasang ulang fungsi arah
             -- saat respawn / ganti world; tanpa ini karakter diam walau script jalan).
-            if App.job and App.controls and not App.teleporting and not App.recovering then pcall(G.Movement.takeControls) end
             if not App.configuring and not App.job and os.clock() >= nextSave then -- saat task jalan config tidak berubah
                 nextSave = os.clock() + 5
                 local saved, issue = pcall(G.State.saveSession)

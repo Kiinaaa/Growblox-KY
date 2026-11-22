@@ -58,6 +58,8 @@ return function(G)
         if type(problem) == "table" then error(problem, 0) end
         App.rotationLastError = os.date("%H:%M:%S") .. " " .. tostring(problem)
         App.rotationSoftErrors = (App.rotationSoftErrors or 0) + 1
+        -- v0.9.12: error langkah dulu ditelan diam-diam (layar tampak diam). Sekarang selalu muncul di Aktivitas terakhir.
+        G.setStatus("GAGAL: " .. tostring(problem):sub(1, 220) .. " | nav: " .. tostring(App.navigationDebug or "-"):sub(1, 120))
         pause(0.15, token)
         Movement.takeControls()
         return false

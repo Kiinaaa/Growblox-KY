@@ -112,7 +112,7 @@ return function(G)
     -- karakter BERHENTI di situ (return "hold" ke Movement) sampai pohon pecah, maksimal HOLD_MAX detik per
     -- pohon (lewat dari itu dilepas supaya tidak macet; pohon itu diselesaikan retryMissed). Jalan tetap
     -- cepat di antara pohon; yang diperlambat cuma saat tepat di pohon.
-    local HOLD_REACH, HOLD_MAX = 0.9, 0.4 -- v0.9.6: tahan maks 0,4 dtk per pohon (dulu 0,8 = terasa diam)
+    local HOLD_REACH, HOLD_MAX = 0.9, 0.8
     local function harvestTree(r, point, seedId, resolver, token)
         local name = r.world.name
         if tileAt(point.x, point.y) ~= seedId or not resolver.ripe(point.x, point.y, seedId) then return false end
@@ -187,7 +187,6 @@ return function(G)
             if #alive == 0 then return false end -- semua sudah pecah: berhenti jalan
             if shouldStop(changed) then return false end -- target blok tercapai: berhenti jalan
             local t = os.clock()
-            local holding = false
             for _, point in ipairs(alive) do
                 local dx = math.abs(state.x - (point.x + 0.5))
                 local inY = math.abs(state.y - (point.y + 1)) <= 1.25
@@ -198,13 +197,7 @@ return function(G)
                         r.handlers.hit(point.x, point.y)
                     end
                 end
-                -- sudah dekat & masih berdiri setelah dipukul: tahan karakter di sini sampai pecah
-                if dx <= HOLD_REACH and inY and hitAt[point] and tileAt(point.x, point.y) == seedId then
-                    heldSince[point] = heldSince[point] or t
-                    if t - heldSince[point] <= HOLD_MAX then holding = true end
-                end
             end
-            if holding then return "hold" end
         end
         local last = alive[#alive]
         Movement.moveTo(last.x, last.y, name, token, strike)
@@ -236,17 +229,14 @@ return function(G)
         local name = r.world.name
         local tried, lastAt = {}, -1
         local function key(point) return point.x .. ":" .. point.y end
-        local PLANT_NEAR = 1.25 -- v0.9.5: tile baru ditanam kalau karakter sudah dalam jarak ini (bukan di ujung jangkauan = sering ditolak server)
         local function plantReachable(group)
             local t = os.clock()
             if t - lastAt < math.min(0.03, opts.placeDelay) then return end -- replant tidak ikut delay Put & Break
             lastAt = t
             local n = 0
-            local here = Bridge.position()
             for _, point in ipairs(group) do
                 if state.sent >= seeds or n >= 8 then break end
-                if not tried[key(point)] and math.abs(here.x - (point.x + 0.5)) <= PLANT_NEAR
-                    and tileAt(point.x, point.y) == 0 and r.handlers.plantSeed
+                if not tried[key(point)] and tileAt(point.x, point.y) == 0 and r.handlers.plantSeed
                     and r.handlers.canPlace(r.items[seedId], point.x, point.y) then
                     tried[key(point)] = true
                     r.handlers.plantSeed(seedId, point.x, point.y)

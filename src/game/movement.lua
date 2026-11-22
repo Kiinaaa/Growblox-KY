@@ -11,47 +11,20 @@ return function(G)
     -- Ganti fungsi arah/lompat milik game dengan versi kita. Selama dipegang, karakter
     -- bergerak sesuai hold.direction (-1 kiri, 0 diam, 1 kanan) dan hold.jump.
     -- Pickup bawaan game juga dibungkus: bisa ditahan (pausePickup) saat menanam/sinkron tas.
-    -- v0.9.6: kontrol dianggap MASIH terpasang hanya kalau fungsi arah/lompat di game masih versi kita. Kalau game
-    -- memasang ulang (respawn, masuk world, reset avatar), override kita lepas dan karakter tidak menurut lagi
-    -- (kelihatan diam / tidak jalan). Di kasus itu kontrol dipasang ulang otomatis.
-    local function stillAttached(hold, r)
-        return hold.table == r.controls and hold.world == r.world
-            and r.controls.dir == hold.dirOverride and r.controls.jumping == hold.jumpOverride
-    end
-    -- v0.9.10: pasang override ke `hold` yang SUDAH ADA (objek yang sama dipakai ulang). Dulu pemasangan ulang membuat
-    -- objek hold baru, sementara walkTo masih menulis arah ke objek lama = karakter diam walau script jalan.
-    local function install(hold, r)
-        local controls, world = r.controls, r.world
-        hold.table, hold.world = controls, world
-        if controls.dir ~= hold.dirOverride then hold.dir = controls.dir end
-        if controls.jumping ~= hold.jumpOverride then hold.jumping = controls.jumping end
-        if world.displayTake ~= hold.displayOverride then hold.displayTake = world.displayTake end
-        if world.takeDrop ~= hold.takeOverride then hold.takeDrop = world.takeDrop end
-        controls.dir, controls.jumping = hold.dirOverride, hold.jumpOverride
-        world.displayTake, world.takeDrop = hold.displayOverride, hold.takeOverride
-    end
     function Movement.takeControls()
-        local current = App.controls
-        if current then
-            local ok, rt = pcall(Bridge.runtime)
-            if not ok then
-                Movement.releaseControls()
-                Bridge.runtime() -- lempar errornya
-            end
-            if stillAttached(current, rt) then return current end
-            install(current, rt)
-            current.suppressedTakes = {}
-            App.controlsReattached = (App.controlsReattached or 0) + 1
-            return current
-        end
+        if App.controls then return App.controls end
         local r = Bridge.runtime()
-        local hold = { direction = 0, jump = false, autoTakes = 0, syncing = false, pausePickup = false, suppressedTakes = {} }
+        local controls, world = r.controls, r.world
+        local hold = { table = controls, dir = controls.dir, jumping = controls.jumping, direction = 0, jump = false,
+            world = world, displayTake = world.displayTake, takeDrop = world.takeDrop, autoTakes = 0,
+            syncing = false, pausePickup = false, suppressedTakes = {} }
         hold.dirOverride = function() return hold.direction end
         hold.jumpOverride = function() return hold.jump end
+        controls.dir, controls.jumping = hold.dirOverride, hold.jumpOverride
         hold.displayOverride = function() end
         hold.takeOverride = function(uid, ...)
             if hold.syncing or hold.pausePickup then
-                hold.suppressedTakes[uid] = { grid = hold.world.fg, at = os.clock() }
+                hold.suppressedTakes[uid] = { grid = world.fg, at = os.clock() }
                 return 0
             end
             hold.suppressedTakes[uid] = nil
@@ -61,7 +34,7 @@ return function(G)
             if not result[1] then error(result[2]) end
             return table.unpack(result, 2, result.n)
         end
-        install(hold, r)
+        world.displayTake, world.takeDrop = hold.displayOverride, hold.takeOverride
         App.controls = hold
         return hold
     end
@@ -129,7 +102,7 @@ return function(G)
         local hold = Movement.takeControls()
         local targetX, targetY = x + 0.5, y + 1
         local farmNavigation = App.job == "plant" or App.job == "harvest" or App.job == "rotation"
-        local timeout = farmNavigation and math.max(90, App.config.options.moveTimeout) or App.config.options.moveTimeout -- v0.9.11: kembali seperti v0.9.4 (farm minimal 90 dtk)
+        local timeout = farmNavigation and math.max(90, App.config.options.moveTimeout) or App.config.options.moveTimeout
         local deadline, banned, replans = os.clock() + timeout, {}, 0
         local function collectionStep(state)
             if not onStep then return true, 0 end
@@ -139,28 +112,12 @@ return function(G)
             deadline = deadline + waited -- waktu menunggu aksi tidak dihitung sebagai gagal jalan
             return proceed ~= false, waited, proceed == "hold"
         end
-        -- v0.9.5: BATAS KECEPATAN JALAN. Hanya saat ada onStep (menyapu panen / menanam / mendekati pohon): kecepatan
-        -- horizontal dibatasi walkSpeed x kecepatan penuh (slider di tab Rotation, langsung berlaku). Di atas batas,
-        -- tombol arah dilepas (karakter melambat), di bawahnya jalan lagi. Lompat / turun / di udara tidak dibatasi.
-        local baseSpeed = Movement.navigationMap(r).speed or 7.2
-        local function pace()
-            if not onStep then return 1 end
-            return math.min(1, math.max(0.2, App.config.options.walkSpeed or 1))
-        end
-        local function limited(direction, state, waypoint)
-            local scale = pace()
-            if scale >= 0.999 or direction == 0 or waypoint.jump or waypoint.drop or not state.grounded then return direction end
-            local vx = state.vx or 0
-            if vx * direction > 0 and math.abs(vx) >= baseSpeed * scale then return 0 end
-            return direction
-        end
         local function reached(state, tx, ty)
             return state.grounded and math.abs(state.x - tx) < 0.16
                 and math.abs(state.y - ty) < 0.22 and math.abs(state.vx or 0) < 0.8
         end
         while true do
             worldCheck(worldName, token)
-            hold = Movement.takeControls() -- v0.9.6: pastikan kontrol masih terpasang (replan juga lewat sini)
             local state = position()
             local proceed, _, pacing = collectionStep(state)
             if not proceed then hold.direction, hold.jump = 0, false; return false end
@@ -230,18 +187,13 @@ return function(G)
                     state = position()
                     if not stepPacing and reached(state, waypoint.x + 0.5, waypoint.y + 1) then break end
                     assert(os.clock() < deadline, "Returning to the saved position timed out. Check the route.")
-                    -- v0.9.6: kotak teks yang masih fokus (mis. habis mengetik nama world di UI) dulu MEMBEKUKAN karakter
-                    -- selamanya. Sekarang fokusnya dilepas dan jalan lanjut.
-                    local focused = G.focusedTextBox()
-                    if focused then pcall(function() focused:ReleaseFocus() end) end
-                    if stepPacing then
+                    if G.focusedTextBox() or stepPacing then
                         hold.direction, hold.jump = 0, false
                         movedAt = os.clock()
                         if stepPacing then began, deadline = began + 0.025, deadline + 0.025 end
                     else
                         hold.direction = waypoint.drop and Navigation.dropSteer(state, waypoint)
                             or Navigation.steer(waypoint.x + 0.5 - state.x, state.vx or 0, state.grounded and 48 or 17)
-                        hold.direction = limited(hold.direction, state, waypoint)
                         if waypoint.jump and not launchAt and state.grounded then launchAt = os.clock() end
                         if launchAt and not state.grounded then airborne = true end
                         hold.jump = launchAt ~= nil and ((not airborne and os.clock() - launchAt < 0.2)
@@ -249,8 +201,7 @@ return function(G)
                         if math.abs(state.x - movedX) + math.abs(state.y - movedY) > 0.08 then
                             movedX, movedY, movedAt = state.x, state.y, os.clock()
                         end
-                        -- batas waktu per langkah ikut diperpanjang saat jalan diperlambat (1 / walkSpeed)
-                        if os.clock() - movedAt > 1 or os.clock() - began > math.max(2.5, waypoint.duration / pace() + 1.5) then
+                        if os.clock() - movedAt > 1 or os.clock() - began > math.max(2.5, waypoint.duration + 1.5) then
                             failed = waypoint
                             break
                         end
