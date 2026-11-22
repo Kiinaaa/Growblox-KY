@@ -533,7 +533,17 @@ return function(G)
                         local here = standing()
                         if here.y ~= startPoint.y or math.abs(here.x - startPoint.x) > 1 then
                             progress(string.format("jalan ke ujung baris (%d,%d) untuk mulai panen", startPoint.x, startPoint.y))
-                            soft(token, name, function() Movement.moveTo(startPoint.x, startPoint.y, name, token) end)
+                            -- v0.9.8: jalan awal ini cuma pelengkap. Batas waktunya dipendekkan (maks 15 dtk) dan kalau gagal
+                            -- panen tetap lanjut dari posisi sekarang (sweepTrees jalan sendiri), jadi tidak bisa menahan panen.
+                            local opts = App.config.options
+                            local savedTimeout = opts.moveTimeout
+                            opts.moveTimeout = math.min(savedTimeout or 15, 15)
+                            local walked = soft(token, name, function() Movement.moveTo(startPoint.x, startPoint.y, name, token) end)
+                            opts.moveTimeout = savedTimeout
+                            if not walked then
+                                App.rotationWalkSkips = (App.rotationWalkSkips or 0) + 1
+                                progress("gagal jalan ke ujung baris, panen lanjut dari posisi sekarang")
+                            end
                         end
                     end
                     local lastPoint
