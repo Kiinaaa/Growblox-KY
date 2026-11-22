@@ -7,7 +7,7 @@
 --   getgenv().GrowbloxHanselBase    = "https://raw.githubusercontent.com/USERNAME/REPO/dev/"  -- cabang lain
 --   getgenv().GrowbloxHanselDevPath = "GrowbloxHansel"  -- baca dari folder workspace executor, bukan internet
 
-local BASE = "https://raw.githubusercontent.com/Hanselane/growblox-hansel/main/"
+local BASE = "https://raw.githubusercontent.com/kiinaaa/growblox-ky/main/"
 local RETRIES, TIMEOUT = 3, 60
 
 local env = getgenv and getgenv() or _G
